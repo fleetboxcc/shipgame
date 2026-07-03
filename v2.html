@@ -205,23 +205,50 @@ keyLight.position.set(8, 12, 10); scene.add(keyLight);
 function resize(){ const w=innerWidth,h=innerHeight; renderer.setSize(w,h); camera.aspect=w/h; camera.updateProjectionMatrix(); }
 addEventListener('resize', resize); resize();
 
-// ====================== OCEAN (smooth continuous scroll, no snap jerk) ======================
-// Root cause of the old jerk: Math.round(px/CELL)*CELL snapped ocean.position in discrete 2.78u
-// steps. Each snap visibly shifted the wave pattern under the ships. Fix: track a continuous
-// scroll offset (oxOff/ozOff) and feed world-X/Z directly into waveHeight using the vertex's
-// local coords + the continuous scroll — no rounding anywhere.
-const SEG=80, SIZE=180;  // 80 segs = 6561 verts, finer wave surface
+// ====================== OCEAN (world-anchored, living swell) ======================
+// The tile stays centered on the player (so the sea feels infinite) but we track
+// a continuous world-offset so that:
+//   - vertices sample waveHeight at their TRUE world coords → wave pattern tied to world-space
+//   - as time advances, wave peaks roll across the surface (living sea)
+//   - moving the ship shows water passing under it (not the pattern locked to ship)
+//   - no Math.round() cell-snap (the old jerk)
+//
+// Wave function h(x,z,t) — 3 sine waves at different angles + a chop term.
+// The SAME function is used for mesh vertices AND ship/buoy placement, so ships sit ON the surface.
+// Partial derivatives dh/dx, dh/dz give the surface normal analytically → pitch/roll ships.
+const SEG=80, SIZE=180;
 const oceanGeo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
 const ocean = new THREE.Mesh(oceanGeo, new THREE.MeshBasicMaterial({color:0x2f6bb0, wireframe:true, transparent:true, opacity:0.40}));
 ocean.rotation.x = -Math.PI/2; ocean.position.y = -2.2; scene.add(ocean);
-const oceanBase = oceanGeo.attributes.position.array.slice(); // local vertex positions
-// Persistent continuous world-offset for the ocean tile (updated every frame from player pos)
-let oxOff = 0, ozOff = 0;
-// Grid overlay — two separate PlaneGeometry wireframes so we can scroll them smoothly too
-const gridMat = new THREE.MeshBasicMaterial({color:0x1b3c63, wireframe:true, transparent:true, opacity:0.25});
+const oceanBase = oceanGeo.attributes.position.array.slice();
+let oxOff = 0, ozOff = 0; // continuous world-offset, updated each frame
+const gridMat = new THREE.MeshBasicMaterial({color:0x1b3c63, wireframe:true, transparent:true, opacity:0.22});
 const grid = new THREE.Mesh(new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG), gridMat);
-grid.rotation.x = -Math.PI/2; grid.position.y = -2.25; scene.add(grid);
-function waveHeight(x, z, t){ return Math.sin(x*0.25 + t*1.1)*0.40 + Math.sin(z*0.2 - t*0.8)*0.30; }
+grid.rotation.x = -Math.PI/2; grid.position.y = -2.26; scene.add(grid);
+
+// Three sine waves: (frequency X, frequency Z, phase-speed, amplitude, direction-skew)
+const WAVES = [
+  { kx:0.18, kz:0.10, speed:1.10, amp:0.42 },  // long rolling swell, NE
+  { kx:0.08, kz:0.22, speed:0.78, amp:0.30 },  // cross-swell, NW
+  { kx:0.30, kz:0.18, speed:1.55, amp:0.14 },  // short chop
+];
+function waveHeight(x, z, t){
+  let h = 0;
+  for(const w of WAVES) h += w.amp * Math.sin(w.kx*x + w.kz*z + w.speed*t);
+  return h;
+}
+// Analytical surface normal from partial derivatives (for ship pitch/roll)
+function waveNormal(x, z, t){
+  let dhx = 0, dhz = 0;
+  for(const w of WAVES){
+    const c = Math.cos(w.kx*x + w.kz*z + w.speed*t);
+    dhx += w.amp * w.kx * c;
+    dhz += w.amp * w.kz * c;
+  }
+  // normal = normalize(-dhx, 1, -dhz)  (surface tangents × each other)
+  const n = new THREE.Vector3(-dhx, 1, -dhz).normalize();
+  return n;
+}
 
 // ====================== SHIP TEMPLATES (pirate kit + fallback sailship) ======================
 // Models:
@@ -1316,19 +1343,19 @@ function animate(){
   state.t += dt;
   const t = state.t;
 
-  // Ocean smooth scroll: track player position continuously (no Math.round snapping).
-  // ocean.position stays at the player; vertices sample world-space waveHeight using
-  // their local coords + the continuous offset, so the wave pattern never jumps.
+  // Ocean: center tile on player (infinite-sea feel) with continuous world-space wave sampling.
+  // No Math.round — oxOff tracks player position continuously.
+  // Vertices sample waveHeight at their world coords (local + offset), so:
+  //   · moving the ship shows different wave heights passing under it
+  //   · t advancing makes peaks roll across the surface even when the ship is still
   if(player){
     oxOff = player.group.position.x;
     ozOff = player.group.position.z;
   }
   ocean.position.set(oxOff, -2.2, ozOff);
-  grid.position.set(oxOff, -2.25, ozOff);
+  grid.position.set(oxOff, -2.26, ozOff);
   const posAttr = oceanGeo.attributes.position;
   for(let i=0;i<posAttr.count;i++){
-    // oceanBase stores PlaneGeometry local coords: [x, y, 0] pre -PI/2 rotation
-    // after rotation: localX→worldX, localY→worldZ, localZ→worldY (displacement)
     const wx = oceanBase[i*3]   + oxOff;  // world X
     const wz = oceanBase[i*3+1] + ozOff;  // world Z
     posAttr.array[i*3+2] = waveHeight(wx, wz, t);
@@ -1374,14 +1401,32 @@ function animate(){
 
   if(state.shake > 0) state.shake -= dt;
 
-  // wave bob for all live vessels
+  // Float every vessel on the same wave surface used for the mesh.
+  // h(x,z,t) gives vertical displacement; dh/dx and dh/dz give the surface normal
+  // so the ship pitches and rolls with the swell without drifting its heading.
+  const SEA_LEVEL = -2.2;    // ocean mesh Y (ocean.position.y)
+  const SHIP_DRAFT = 2.42;   // how far above sea-level the ship pivot sits
   const all = player ? [player, ...allies, ...enemies] : [];
   for(const v of all){
     if(v.gone || v.sinking) continue;
     const gp = v.group.position;
-    const wh = waveHeight(gp.x, gp.z, t);
-    gp.y = 0.35 + wh*0.35 + Math.sin(t*0.9 + v.bob)*0.06;
-    v.group.rotation.z = Math.sin(t*0.8 + v.bob)*0.04 + (v.heel||0);
+    const h = waveHeight(gp.x, gp.z, t);
+    // smooth Y toward wave surface (lerp avoids teleport on respawn / fast transitions)
+    const targetY = SEA_LEVEL + SHIP_DRAFT + h;
+    gp.y += (targetY - gp.y) * Math.min(1, dt * 8);
+    // pitch/roll from wave normal — preserve existing yaw (heading)
+    const norm = waveNormal(gp.x, gp.z, t);
+    // decompose into pitch (around ship's right axis) and roll (around ship's forward axis)
+    const yaw = v.yaw || 0;
+    const shipFwd  = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+    const shipRight = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+    const pitch = Math.asin(Math.max(-0.35, Math.min(0.35,  norm.dot(shipFwd))));
+    const roll  = Math.asin(Math.max(-0.35, Math.min(0.35, -norm.dot(shipRight))));
+    // apply: yaw from movement, pitch/roll from sea (smoothed slightly via lerp on rot)
+    const targetPitch = pitch * 0.7;
+    const targetRoll  = roll  * 0.7 + (v.heel||0);
+    v.group.rotation.x += (targetPitch - v.group.rotation.x) * Math.min(1, dt*5);
+    v.group.rotation.z += (targetRoll  - v.group.rotation.z) * Math.min(1, dt*5);
     updateFlashTint(v, dt);
   }
 
