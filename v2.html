@@ -205,16 +205,29 @@ keyLight.position.set(8, 12, 10); scene.add(keyLight);
 function resize(){ const w=innerWidth,h=innerHeight; renderer.setSize(w,h); camera.aspect=w/h; camera.updateProjectionMatrix(); }
 addEventListener('resize', resize); resize();
 
-// ====================== OCEAN (recentered on the player) ======================
-const SEG=54, SIZE=170, CELL=SIZE/SEG;
+// ====================== OCEAN (smooth continuous scroll, no snap jerk) ======================
+// Root cause of the old jerk: Math.round(px/CELL)*CELL snapped ocean.position in discrete 2.78u
+// steps. Each snap visibly shifted the wave pattern under the ships. Fix: track a continuous
+// scroll offset (oxOff/ozOff) and feed world-X/Z directly into waveHeight using the vertex's
+// local coords + the continuous scroll — no rounding anywhere.
+const SEG=80, SIZE=180;  // 80 segs = 6561 verts, finer wave surface
 const oceanGeo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
 const ocean = new THREE.Mesh(oceanGeo, new THREE.MeshBasicMaterial({color:0x2f6bb0, wireframe:true, transparent:true, opacity:0.40}));
 ocean.rotation.x = -Math.PI/2; ocean.position.y = -2.2; scene.add(ocean);
-const oceanBase = oceanGeo.attributes.position.array.slice();
-const grid = new THREE.GridHelper(SIZE, SEG, 0x1b3c63, 0x122a46); grid.position.y=-2.25; scene.add(grid);
+const oceanBase = oceanGeo.attributes.position.array.slice(); // local vertex positions
+// Persistent continuous world-offset for the ocean tile (updated every frame from player pos)
+let oxOff = 0, ozOff = 0;
+// Grid overlay — two separate PlaneGeometry wireframes so we can scroll them smoothly too
+const gridMat = new THREE.MeshBasicMaterial({color:0x1b3c63, wireframe:true, transparent:true, opacity:0.25});
+const grid = new THREE.Mesh(new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG), gridMat);
+grid.rotation.x = -Math.PI/2; grid.position.y = -2.25; scene.add(grid);
 function waveHeight(x, z, t){ return Math.sin(x*0.25 + t*1.1)*0.40 + Math.sin(z*0.2 - t*0.8)*0.30; }
 
-// ====================== SHIP TEMPLATE (sailship.glb → glowing edges) ======================
+// ====================== SHIP TEMPLATES (pirate kit + fallback sailship) ======================
+// Models:
+//   Ship_Large.glb (Quaternius Pirate Kit, CC0) — player flagship & enemy boss/heavy
+//   Ship_Small.glb (Quaternius Pirate Kit, CC0) — allied fleet ships
+//   sailship.glb   — enemy skiff/gunner (already committed)
 const hullGhost = new THREE.MeshBasicMaterial({color:0x050a18, transparent:true, opacity:0.12, depthWrite:false});
 function buildTemplate(root){
   const box = new THREE.Box3().setFromObject(root);
@@ -237,18 +250,24 @@ function buildTemplate(root){
   });
   return {edgeGeoList, norm};
 }
-let TPL = null;
-const pendingStart = [];
-new GLTFLoader().load('sailship.glb', g=>{
-  TPL = buildTemplate(g.scene);
-  while(pendingStart.length) pendingStart.shift()();
-}, undefined, err=>{ console.warn('sailship.glb load failed', err); });
 
-function makeShip(size, tint){
+// Three templates loaded in parallel; game starts when all three arrive.
+const TPLS = { large: null, small: null, sail: null };
+let pendingCount = 3;
+const pendingStart = [];
+function onTplLoad(key, scene){ TPLS[key] = buildTemplate(scene); if(--pendingCount===0) while(pendingStart.length) pendingStart.shift()(); }
+const loader = new GLTFLoader();
+loader.load('Ship_Large.glb', g=>onTplLoad('large', g.scene), undefined, e=>{ console.warn('Ship_Large failed, using sail', e); TPLS.large=null; if(--pendingCount===0) while(pendingStart.length) pendingStart.shift()(); });
+loader.load('Ship_Small.glb', g=>onTplLoad('small', g.scene), undefined, e=>{ console.warn('Ship_Small failed, using sail', e); TPLS.small=null; if(--pendingCount===0) while(pendingStart.length) pendingStart.shift()(); });
+loader.load('sailship.glb',   g=>onTplLoad('sail',  g.scene), undefined, e=>{ console.warn('sailship failed', e); TPLS.sail=null; if(--pendingCount===0) while(pendingStart.length) pendingStart.shift()(); });
+
+function makeShipFromTpl(tpl, size, tint){
+  if(!tpl) tpl = TPLS.sail || Object.values(TPLS).find(t=>t); // graceful fallback
+  if(!tpl) return {group: new THREE.Group(), lineMats:[], hullMat: hullGhost.clone()};
   const grp = new THREE.Group();
   const lineMats = [];
   const hull = hullGhost.clone();
-  for(const e of TPL.edgeGeoList){
+  for(const e of tpl.edgeGeoList){
     const fill = new THREE.Mesh(e.srcGeo, hull);
     fill.applyMatrix4(e.matrix); grp.add(fill);
     const c = tint || e.color;
@@ -258,8 +277,17 @@ function makeShip(size, tint){
     const ls = new THREE.LineSegments(e.geo, mat);
     ls.applyMatrix4(e.matrix); grp.add(ls);
   }
-  grp.scale.setScalar(TPL.norm * size);
+  grp.scale.setScalar(tpl.norm * size);
   return {group:grp, lineMats, hullMat:hull};
+}
+// Convenience: pick template by role
+function makeShip(role, size, tint){
+  // role: 'player'|'ally'|'skiff'|'gunner'|'heavy'|'boss'
+  let tpl;
+  if(role==='player' || role==='boss' || role==='heavy') tpl = TPLS.large || TPLS.sail;
+  else if(role==='ally') tpl = TPLS.small || TPLS.sail;
+  else tpl = TPLS.sail || TPLS.large; // skiff/gunner = sailship
+  return makeShipFromTpl(tpl, size, tint);
 }
 
 // ====================== AUDIO (synth, fail-silent) ======================
@@ -315,8 +343,8 @@ function moveSpeed(){ return 11 * (1 + passives.sails*0.08); }
 function magnetR(){ return 4.5 * (1 + passives.magnet*0.4); }
 
 // ====================== VESSELS ======================
-function makeVessel(kind, size, tint, x, z, yaw){
-  const {group, lineMats, hullMat} = makeShip(size, tint);
+function makeVessel(kind, size, tint, x, z, yaw, role){
+  const {group, lineMats, hullMat} = makeShip(role||kind, size, tint);
   group.position.set(x, 0.35, z);
   group.rotation.y = yaw;
   scene.add(group);
@@ -367,7 +395,7 @@ function spawnEnemy(type, ring){
   const pp = player.group.position;
   const a = Math.random()*Math.PI*2;
   const r = (ring||46) + Math.random()*8;
-  const e = makeVessel('enemy', T.size, new THREE.Color(T.tint), pp.x+Math.sin(a)*r, pp.z+Math.cos(a)*r, a+Math.PI);
+  const e = makeVessel('enemy', T.size, new THREE.Color(T.tint), pp.x+Math.sin(a)*r, pp.z+Math.cos(a)*r, a+Math.PI, type);
   const hpScale = 1 + minute()*0.55;
   e.type = type;
   e.hp = e.maxHp = T.hp * hpScale;
@@ -1273,7 +1301,7 @@ $('startBtn').addEventListener('click', ()=>{
     renderWeaponSlots();
     state.running = true;
   };
-  if(TPL) go(); else pendingStart.push(go);
+  if(pendingCount===0) go(); else pendingStart.push(go);
 });
 
 // ====================== MAIN LOOP ======================
@@ -1288,17 +1316,22 @@ function animate(){
   state.t += dt;
   const t = state.t;
 
-  // ocean follows the player
+  // Ocean smooth scroll: track player position continuously (no Math.round snapping).
+  // ocean.position stays at the player; vertices sample world-space waveHeight using
+  // their local coords + the continuous offset, so the wave pattern never jumps.
   if(player){
-    const px = player.group.position.x, pz = player.group.position.z;
-    ocean.position.x = Math.round(px/CELL)*CELL;
-    ocean.position.z = Math.round(pz/CELL)*CELL;
-    grid.position.x = ocean.position.x; grid.position.z = ocean.position.z;
+    oxOff = player.group.position.x;
+    ozOff = player.group.position.z;
   }
+  ocean.position.set(oxOff, -2.2, ozOff);
+  grid.position.set(oxOff, -2.25, ozOff);
   const posAttr = oceanGeo.attributes.position;
   for(let i=0;i<posAttr.count;i++){
-    const x=oceanBase[i*3]+ocean.position.x, z=oceanBase[i*3+1]+ocean.position.z;
-    posAttr.array[i*3+2] = waveHeight(x, z, t);
+    // oceanBase stores PlaneGeometry local coords: [x, y, 0] pre -PI/2 rotation
+    // after rotation: localX→worldX, localY→worldZ, localZ→worldY (displacement)
+    const wx = oceanBase[i*3]   + oxOff;  // world X
+    const wz = oceanBase[i*3+1] + ozOff;  // world Z
+    posAttr.array[i*3+2] = waveHeight(wx, wz, t);
   }
   posAttr.needsUpdate = true;
 

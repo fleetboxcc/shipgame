@@ -186,13 +186,17 @@ keyLight.position.set(8, 12, 10); scene.add(keyLight);
 function resize(){ const w=innerWidth,h=innerHeight; renderer.setSize(w,h); camera.aspect=w/h; camera.updateProjectionMatrix(); }
 addEventListener('resize', resize); resize();
 
-// ====================== OCEAN (animated wireframe grid, recentered on the player) ======================
-const SEG=54, SIZE=150, CELL=SIZE/SEG;
+// ====================== OCEAN (animated wireframe grid, smooth continuous scroll) ======================
+// Fix: removed Math.round() cell-snapping; ocean tile now follows player position continuously.
+const SEG=80, SIZE=160;
 const oceanGeo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
 const ocean = new THREE.Mesh(oceanGeo, new THREE.MeshBasicMaterial({color:0x2f6bb0, wireframe:true, transparent:true, opacity:0.40}));
 ocean.rotation.x = -Math.PI/2; ocean.position.y = -2.2; scene.add(ocean);
 const oceanBase = oceanGeo.attributes.position.array.slice();
-const grid = new THREE.GridHelper(SIZE, SEG, 0x1b3c63, 0x122a46); grid.position.y=-2.25; scene.add(grid);
+let oxOff = 0, ozOff = 0;
+const gridMat = new THREE.MeshBasicMaterial({color:0x1b3c63, wireframe:true, transparent:true, opacity:0.25});
+const grid = new THREE.Mesh(new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG), gridMat);
+grid.rotation.x = -Math.PI/2; grid.position.y = -2.25; scene.add(grid);
 
 function waveHeight(x, z, t){
   return Math.sin(x*0.25 + t*1.1)*0.40 + Math.sin(z*0.2 - t*0.8)*0.30;
@@ -1121,17 +1125,18 @@ function animate(){
   state.t += dt;
   const t = state.t;
 
-  // ocean waves — recenter the sheet on the player so the sea feels endless
+  // ocean waves: continuous smooth scroll, no Math.round snap
   if(player){
-    const px = player.group.position.x, pz = player.group.position.z;
-    ocean.position.x = Math.round(px/CELL)*CELL;
-    ocean.position.z = Math.round(pz/CELL)*CELL;
-    grid.position.x = ocean.position.x; grid.position.z = ocean.position.z;
+    oxOff = player.group.position.x;
+    ozOff = player.group.position.z;
   }
+  ocean.position.set(oxOff, -2.2, ozOff);
+  grid.position.set(oxOff, -2.25, ozOff);
   const posAttr = oceanGeo.attributes.position;
   for(let i=0;i<posAttr.count;i++){
-    const x=oceanBase[i*3]+ocean.position.x, z=oceanBase[i*3+1]+ocean.position.z;
-    posAttr.array[i*3+2] = waveHeight(x, z, t);
+    const wx = oceanBase[i*3]   + oxOff;
+    const wz = oceanBase[i*3+1] + ozOff;
+    posAttr.array[i*3+2] = waveHeight(wx, wz, t);
   }
   posAttr.needsUpdate = true;
 
