@@ -216,22 +216,20 @@ addEventListener('resize', resize); resize();
 // Wave function h(x,z,t) — 3 sine waves at different angles + a chop term.
 // The SAME function is used for mesh vertices AND ship/buoy placement, so ships sit ON the surface.
 // Partial derivatives dh/dx, dh/dz give the surface normal analytically → pitch/roll ships.
-const SEG=80, SIZE=180;
+// Large plane at world origin — never moves, so grid lines stream past as ship travels.
+// Wireframe vertices displaced by waveHeight(worldX, worldZ, t) each frame → lines ripple.
+const SEG=80, SIZE=800;
 const oceanGeo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
-const oceanColBuf = new Float32Array(oceanGeo.attributes.position.count * 3);
-oceanGeo.setAttribute('color', new THREE.BufferAttribute(oceanColBuf, 3));
-const ocean = new THREE.Mesh(oceanGeo, new THREE.MeshBasicMaterial({vertexColors:true, transparent:true, opacity:0.70, side:THREE.DoubleSide}));
+const ocean = new THREE.Mesh(oceanGeo, new THREE.MeshBasicMaterial({color:0x2f6bb0, wireframe:true, transparent:true, opacity:0.40}));
 ocean.rotation.x = -Math.PI/2;
 ocean.position.y = -2.2;
 scene.add(ocean);
+// oceanBase: local vertex XY (= world XZ since mesh is at origin with no position offset)
 const oceanBase = oceanGeo.attributes.position.array.slice();
-let oxOff = 0, ozOff = 0; // continuous world-offset, updated each frame
-// Static world grid — lines sit at world positions, ship moves THROUGH them
-const grid = new THREE.GridHelper(800, 80, 0x1b3c63, 0x1b3c63);
-grid.position.y = -2.27;
-grid.material.transparent = true;
-grid.material.opacity = 0.28;
-scene.add(grid);
+let oxOff = 0, ozOff = 0; // used only for ship-float world coords
+const gridMat = new THREE.MeshBasicMaterial({color:0x1b3c63, wireframe:true, transparent:true, opacity:0.22});
+const grid = new THREE.Mesh(new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG), gridMat);
+grid.rotation.x = -Math.PI/2; grid.position.y = -2.27; scene.add(grid);
 
 // Three sine waves: (frequency X, frequency Z, phase-speed, amplitude, direction-skew)
 const WAVES = [
@@ -1350,41 +1348,16 @@ function animate(){
   state.t += dt;
   const t = state.t;
 
-  // Ocean: center tile on player (infinite-sea feel) with continuous world-space wave sampling.
-  // No Math.round — oxOff tracks player position continuously.
-  // Vertices sample waveHeight at their world coords (local + offset), so:
-  //   · moving the ship shows different wave heights passing under it
-  //   · t advancing makes peaks roll across the surface even when the ship is still
-  // Keep ocean plane centered on ship for coverage
+  // Ocean: world-anchored wireframe — mesh stays at origin, lines stream past as ship moves.
+  // Displace vertices by waveHeight(worldX, worldZ, t) so lines ripple with the swell.
   if(player){ oxOff = player.group.position.x; ozOff = player.group.position.z; }
-  ocean.position.set(oxOff, -2.2, ozOff);
-
-  // Update ocean vertices: world coords for wave height, vertex colors for visible swell
   const posAttr = oceanGeo.attributes.position;
-  const colAttr = oceanGeo.attributes.color;
-  // find wave height range for normalization
-  let wMin = Infinity, wMax = -Infinity;
   for(let i=0;i<posAttr.count;i++){
-    const wx = oceanBase[i*3]   + oxOff;  // world X
-    const wz = oceanBase[i*3+1] + ozOff;  // world Z
-    const h = waveHeight(wx, wz, t);
-    if(h<wMin) wMin=h; if(h>wMax) wMax=h;
-  }
-  const wRange = Math.max(0.01, wMax - wMin);
-  for(let i=0;i<posAttr.count;i++){
-    const wx = oceanBase[i*3]   + oxOff;  // world X
-    const wz = oceanBase[i*3+1] + ozOff;  // world Z
-    const h = waveHeight(wx, wz, t);
-    posAttr.array[i*3+2] = h;
-    // Color: trough = deep navy (0.04, 0.18, 0.38), crest = bright cyan-white (0.40, 0.75, 0.95)
-    const n = (h - wMin) / wRange;
-    colAttr.array[i*3]   = 0.04 + n * 0.36;
-    colAttr.array[i*3+1] = 0.18 + n * 0.57;
-    colAttr.array[i*3+2] = 0.38 + n * 0.57;
+    // local XY = world XZ (mesh at origin, rotated -PI/2 on X)
+    posAttr.array[i*3+2] = waveHeight(oceanBase[i*3], oceanBase[i*3+1], t);
   }
   posAttr.needsUpdate = true;
-  colAttr.needsUpdate = true;
-  // grid is world-anchored — no position update needed
+  // grid and ocean meshes are world-anchored — no position updates needed
 
   const live = state.running && !state.paused && !state.over;
   if(live){
