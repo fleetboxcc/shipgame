@@ -227,9 +227,6 @@ scene.add(ocean);
 // oceanBase: local vertex XY (= world XZ since mesh is at origin with no position offset)
 const oceanBase = oceanGeo.attributes.position.array.slice();
 let oxOff = 0, ozOff = 0; // used only for ship-float world coords
-const gridMat = new THREE.MeshBasicMaterial({color:0x1b3c63, wireframe:true, transparent:true, opacity:0.22});
-const grid = new THREE.Mesh(new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG), gridMat);
-grid.rotation.x = -Math.PI/2; grid.position.y = -2.27; scene.add(grid);
 
 // Three sine waves: (frequency X, frequency Z, phase-speed, amplitude, direction-skew)
 const WAVES = [
@@ -1357,7 +1354,7 @@ function animate(){
     posAttr.array[i*3+2] = waveHeight(oceanBase[i*3], oceanBase[i*3+1], t);
   }
   posAttr.needsUpdate = true;
-  // grid and ocean meshes are world-anchored — no position updates needed
+  // ocean mesh is world-anchored — no position update needed
 
   const live = state.running && !state.paused && !state.over;
   if(live){
