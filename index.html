@@ -1,0 +1,1231 @@
+<!DOCTYPE html><html lang="ru"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>fleetbox — морской бой (мини-игра)</title>
+<style>
+  /* same world as _demo_fleetfactory.html: dark naval bg, cyan wireframe, mono HUD */
+  :root{
+    --bg0:#04070f; --bg1:#0e1830;
+    --text:#EAF2FF; --muted:#9fb3d1;
+    --blue:#5AA9FF; --blue2:#3B6EFF; --violet:#8B5CF6;
+    --ember:#FF8A4C; --cyan:#9AD2FF; --line:#1f2740;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:radial-gradient(1200px 800px at 60% 6%, #0e1830, #04070f 72%);
+    color:var(--text);font-family:'Manrope',system-ui,sans-serif;overflow:hidden;-webkit-font-smoothing:antialiased;
+    touch-action:none;user-select:none;-webkit-user-select:none}
+  #c{position:fixed;inset:0;width:100vw;height:100vh;display:block;z-index:0}
+  /* gradient fog — top haze hides the far ocean edge (always keep), bottom fade into page bg */
+  .fogtop{position:fixed;left:0;right:0;top:0;height:34vh;z-index:1;pointer-events:none;
+    background:linear-gradient(180deg, #04070f 0%, #04070f 18%, rgba(4,7,15,.85) 46%, rgba(4,7,15,.3) 78%, rgba(4,7,15,0) 100%)}
+  .fogbot{position:fixed;left:0;right:0;bottom:0;height:16vh;z-index:1;pointer-events:none;
+    background:linear-gradient(180deg, rgba(4,7,15,0) 0%, rgba(4,7,15,.45) 60%, #04070f 100%)}
+
+  /* ---- HUD ---- */
+  .hud{position:fixed;left:24px;top:20px;z-index:3;pointer-events:none;
+    font-family:'JetBrains Mono',monospace;display:flex;flex-direction:column;gap:9px}
+  .hud .title{font-size:11px;letter-spacing:.18em;color:#6ea0e0;text-transform:uppercase}
+  .hpwrap{width:210px;height:12px;border:1px solid rgba(255,138,76,.5);border-radius:999px;
+    background:rgba(10,16,32,.6);overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,.4)}
+  #hpbar{height:100%;width:100%;border-radius:999px;transition:width .25s ease;
+    background:linear-gradient(90deg,#FF8A4C,#FFB07A)}
+  .hpwrap.hurt{animation:shake .3s}
+  @keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}
+  .stat{font-size:12.5px;color:var(--cyan)}
+  .stat b{color:#fff;font-size:15px}
+  .stat .amber{color:#ffd9bf}
+
+  .hint{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:3;pointer-events:none;
+    font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#7d95bd;white-space:nowrap;
+    padding:8px 16px;border:1px solid var(--line);border-radius:999px;background:rgba(10,16,32,.65);backdrop-filter:blur(6px)}
+  .hint b{color:var(--cyan);font-weight:600}
+  @media (max-width:700px){ .hint{display:none} }
+
+  .tag{position:fixed;top:16px;right:18px;z-index:3;font-family:'JetBrains Mono',monospace;font-size:11px;color:#3f567a;pointer-events:none}
+
+  /* ---- start / end overlays ---- */
+  .overlay{position:fixed;inset:0;z-index:6;display:flex;align-items:center;justify-content:center;
+    background:rgba(4,7,15,.62);backdrop-filter:blur(5px);opacity:1;transition:opacity .4s}
+  .overlay.hidden{opacity:0;pointer-events:none}
+  .panel{max-width:480px;text-align:center;padding:40px 44px;border:1px solid var(--line);border-radius:20px;
+    background:rgba(8,13,26,.85);box-shadow:0 30px 80px rgba(0,0,0,.6)}
+  .panel .eyebrow{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.18em;color:#6ea0e0;text-transform:uppercase;margin-bottom:14px}
+  .panel h1{font-family:'Space Grotesk',system-ui,sans-serif;font-weight:700;font-size:clamp(26px,4.5vw,40px);line-height:1.08;margin-bottom:14px}
+  .panel h1 .g{background:linear-gradient(100deg,var(--cyan),var(--blue),var(--violet));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .panel h1 .e{background:linear-gradient(100deg,#FFB07A,var(--ember));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .panel p{color:var(--muted);font-size:14.5px;line-height:1.6;margin-bottom:24px}
+  .panel .keys{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--cyan);margin-bottom:26px;line-height:2}
+  .panel .keys kbd{display:inline-block;min-width:26px;padding:2px 7px;border:1px solid rgba(154,210,255,.35);border-radius:6px;
+    background:rgba(154,210,255,.08);color:#fff;font-family:inherit;font-size:11px}
+  .btn{font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:16px;
+    padding:14px 30px;border-radius:12px;cursor:pointer;border:1px solid transparent;
+    background:linear-gradient(135deg,var(--blue2),var(--violet));color:#fff;
+    box-shadow:0 10px 30px rgba(91,140,255,.4);transition:transform .15s, box-shadow .2s}
+  .btn:hover{transform:translateY(-2px);box-shadow:0 14px 38px rgba(91,140,255,.55)}
+  #finalScore{font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--cyan);margin-bottom:24px}
+
+  /* ---- touch controls (coarse pointers only) ---- */
+  .touch{display:none}
+  @media (pointer:coarse){ .touch{display:block} }
+  #joy{position:fixed;left:26px;bottom:26px;width:128px;height:128px;z-index:4;border-radius:50%;
+    border:1.5px solid rgba(154,210,255,.35);background:rgba(10,16,32,.45)}
+  #joyKnob{position:absolute;left:50%;top:50%;width:52px;height:52px;margin:-26px 0 0 -26px;border-radius:50%;
+    background:rgba(154,210,255,.25);border:1.5px solid rgba(154,210,255,.6)}
+  #fireBtn{position:fixed;right:28px;bottom:40px;width:92px;height:92px;z-index:4;border-radius:50%;
+    border:1.5px solid rgba(255,138,76,.6);background:rgba(28,16,8,.6);color:#ffd9bf;
+    font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.08em}
+  #fireBtn:active{background:rgba(255,138,76,.3)}
+  #torpBtn{position:fixed;right:132px;bottom:52px;width:70px;height:70px;z-index:4;border-radius:50%;
+    border:1.5px solid rgba(255,215,0,.6);background:rgba(28,22,4,.6);color:#ffe9a0;
+    font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.06em}
+  #torpBtn:active{background:rgba(255,215,0,.25)}
+
+  /* ---- boss HP bar ---- */
+  .bosshpwrap{width:210px;height:10px;border:1px solid rgba(255,38,80,.6);border-radius:999px;
+    background:rgba(10,16,32,.6);overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,.4);display:none}
+  .bosshpwrap.visible{display:block}
+  #bosshpbar{height:100%;width:100%;border-radius:999px;transition:width .2s ease;
+    background:linear-gradient(90deg,#b0001c,#ff2850,#ff6070)}
+  .stat.bosslabel{color:#ff6070;display:none}
+  .stat.bosslabel.visible{display:block}
+
+  /* ---- boss alert banner ---- */
+  #bossAlert{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:5;pointer-events:none;
+    font-family:'Space Grotesk',system-ui,sans-serif;font-size:clamp(32px,6vw,60px);font-weight:700;
+    text-align:center;opacity:0;transition:opacity .3s;text-shadow:0 0 40px rgba(255,40,80,.8)}
+  #bossAlert.show{opacity:1}
+  #bossAlert .line1{color:#ff2850;letter-spacing:.04em}
+  #bossAlert .line2{color:#ff9ab0;font-size:0.48em;letter-spacing:.22em;text-transform:uppercase;font-family:'JetBrains Mono',monospace;margin-top:4px}
+
+  /* ---- ascension banner ---- */
+  #ascendAlert{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:5;pointer-events:none;
+    font-family:'Space Grotesk',system-ui,sans-serif;font-size:clamp(32px,6vw,60px);font-weight:700;
+    text-align:center;opacity:0;transition:opacity .3s;text-shadow:0 0 46px rgba(255,200,90,.85)}
+  #ascendAlert.show{opacity:1}
+  #ascendAlert .line1{color:#FFD700;letter-spacing:.08em}
+  #ascendAlert .line2{color:#ffe9b0;font-size:0.4em;letter-spacing:.22em;text-transform:uppercase;font-family:'JetBrains Mono',monospace;margin-top:4px}
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Manrope:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="fogtop"></div>
+<div class="fogbot"></div>
+
+<div class="hud">
+  <div class="title">◆ fleetbox · морской бой</div>
+  <div class="hpwrap" id="hpwrap"><div id="hpbar"></div></div>
+  <div class="stat">врагов: <b id="enemies">5</b> &nbsp;·&nbsp; очки: <b class="amber" id="score">0</b></div>
+  <div class="stat">лазер: <b id="laserStat" style="color:#00FFEE">готов</b> &nbsp;·&nbsp; торпеда: <b id="torpStat" style="color:#FFD700">готова</b></div>
+  <div class="stat bosslabel" id="bossLabel">⚠ БОСС</div>
+  <div class="bosshpwrap" id="bosshpwrap"><div id="bosshpbar"></div></div>
+  <div class="stat" id="hordeStat" style="display:none;color:#FFD780">потоплено: <b id="hordeKills" style="color:#FFD700">0</b> / 200</div>
+</div>
+
+<div class="hint"><b>WASD / стрелки</b> — плыть · <b>Пробел / клик</b> — залп · <b>E</b> — лазер · <b>Q</b> — торпеда · одолей Адмирала → возвышение: ×10 лучей, ×5 торпед</div>
+<div class="tag">fleetbox · мини-игра · Three.js</div>
+
+<div class="touch" id="joy"><div id="joyKnob"></div></div>
+<button class="touch" id="fireBtn">ОГОНЬ</button>
+<button class="touch" id="torpBtn">ТОРП</button>
+
+<!-- start overlay -->
+<div class="overlay" id="startOverlay">
+  <div class="panel">
+    <div class="eyebrow">◆ один капитан · вражеский флот</div>
+    <h1>Морской <span class="g">бой.</span></h1>
+    <p>Ты — <span style="color:#ffd9bf">янтарный корабль</span>. Пять вражеских кораблей охотятся за тобой. Маневрируй, заходи бортом и топи их залпами.</p>
+    <div class="keys">
+      <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / стрелки — руль и ход<br>
+      <kbd>Пробел</kbd> или клик — бортовой залп (обе стороны)<br>
+      <kbd>E</kbd> — лазер (перегрев 4с) · <kbd>Q</kbd> — торпеда (раз в 6с)
+    </div>
+    <button class="btn" id="startBtn">В бой →</button>
+  </div>
+</div>
+
+<!-- boss alert -->
+<div id="bossAlert"><div class="line1">АДМИРАЛ ЯВИЛСЯ</div><div class="line2">◆ финальный босс ◆</div></div>
+
+<!-- ascension alert -->
+<div id="ascendAlert"><div class="line1">ВОЗВЫШЕНИЕ</div><div class="line2">◆ ты — командующий · потопи 200 кораблей ◆</div></div>
+
+<!-- end overlay -->
+<div class="overlay hidden" id="endOverlay">
+  <div class="panel">
+    <div class="eyebrow" id="endEyebrow">◆ бой окончен</div>
+    <h1 id="endTitle">Победа</h1>
+    <p id="endSub"></p>
+    <div id="finalScore"></div>
+    <button class="btn" id="restartBtn">Ещё раз →</button>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+// ============================================================================
+// fleetbox mini-game: sail & battle. Same world as _demo_fleetfactory.html —
+// wireframe ocean grid, texture-on-lines sailship.glb, fog into #04070f.
+// ============================================================================
+
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0x04070f, 22, 78);
+const camera = new THREE.PerspectiveCamera(46, 1, 0.1, 300);
+camera.position.set(0, 8, -16);
+
+scene.add(new THREE.HemisphereLight(0xbfd6ff, 0x0a1224, 1.15));
+const keyLight = new THREE.DirectionalLight(0xeaf2ff, 1.5);
+keyLight.position.set(8, 12, 10); scene.add(keyLight);
+
+function resize(){ const w=innerWidth,h=innerHeight; renderer.setSize(w,h); camera.aspect=w/h; camera.updateProjectionMatrix(); }
+addEventListener('resize', resize); resize();
+
+// ====================== OCEAN (animated wireframe grid, recentered on the player) ======================
+const SEG=54, SIZE=150, CELL=SIZE/SEG;
+const oceanGeo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
+const ocean = new THREE.Mesh(oceanGeo, new THREE.MeshBasicMaterial({color:0x2f6bb0, wireframe:true, transparent:true, opacity:0.40}));
+ocean.rotation.x = -Math.PI/2; ocean.position.y = -2.2; scene.add(ocean);
+const oceanBase = oceanGeo.attributes.position.array.slice();
+const grid = new THREE.GridHelper(SIZE, SEG, 0x1b3c63, 0x122a46); grid.position.y=-2.25; scene.add(grid);
+
+function waveHeight(x, z, t){
+  return Math.sin(x*0.25 + t*1.1)*0.40 + Math.sin(z*0.2 - t*0.8)*0.30;
+}
+
+// arena: keep the fight inside this radius (soft clamp)
+const ARENA_R = 55;
+
+// ====================== SHIP TEMPLATE — texture-on-lines sailship.glb ======================
+const hullGhost = new THREE.MeshBasicMaterial({color:0x050a18, transparent:true, opacity:0.12, depthWrite:false});
+
+function buildTemplate(root){
+  const box = new THREE.Box3().setFromObject(root);
+  const c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3());
+  const orient = new THREE.Matrix4();
+  if(s.x > s.z) orient.makeRotationY(Math.PI/2); // bow along +Z
+  const norm = 1 / Math.max(s.x, s.y, s.z);
+  root.updateMatrixWorld(true);
+  const centerMat = new THREE.Matrix4().makeTranslation(-c.x, -c.y, -c.z);
+  const base = new THREE.Matrix4().multiplyMatrices(orient, centerMat);
+  const edgeGeoList = [];
+  root.traverse(o=>{
+    if(o.isMesh && o.geometry){
+      const edges = new THREE.EdgesGeometry(o.geometry, 18);
+      const m = new THREE.Matrix4().multiplyMatrices(base, o.matrixWorld);
+      const col = (o.material && o.material.color) ? o.material.color.clone() : new THREE.Color(0x9AD2FF);
+      col.offsetHSL(0, 0.05, 0.12);
+      edgeGeoList.push({geo: edges, matrix: m, srcGeo: o.geometry.clone(), color: col});
+    }
+  });
+  return {edgeGeoList, norm};
+}
+
+let TPL = null;
+const pendingStart = [];
+new GLTFLoader().load('sailship.glb', g=>{
+  TPL = buildTemplate(g.scene);
+  while(pendingStart.length) pendingStart.shift()();
+}, undefined, err=>{ console.warn('sailship.glb load failed', err); });
+
+// build one glowing-wireframe ship; returns {group, lineMats} (mats for hit-flash / sink-fade)
+function makeShip(size, tint){
+  const grp = new THREE.Group();
+  const lineMats = [];
+  const hull = hullGhost.clone();
+  for(const e of TPL.edgeGeoList){
+    const fill = new THREE.Mesh(e.srcGeo, hull);
+    fill.applyMatrix4(e.matrix);
+    grp.add(fill);
+    const c = tint || e.color;
+    const mat = new THREE.LineBasicMaterial({color:c, transparent:true, opacity:0.95});
+    mat.userData.baseColor = c.clone ? c.clone() : new THREE.Color(c);
+    lineMats.push(mat);
+    const ls = new THREE.LineSegments(e.geo, mat);
+    ls.applyMatrix4(e.matrix);
+    grp.add(ls);
+  }
+  grp.scale.setScalar(TPL.norm * size);
+  return {group:grp, lineMats, hullMat:hull};
+}
+
+// ====================== GAME STATE ======================
+const state = {
+  running:false, over:false, t:0, score:0, bossShake:0,
+  ascended:false, hordeTimer:0,
+};
+const $ = id => document.getElementById(id);
+
+const PLAYER_HP = 10, ENEMY_HP = 3, N_ENEMIES = 5;
+const BOSS_HP = 10, BOSS_SIZE = 9.5, BOSS_TRIGGER = 3; // spawn boss after this many enemy kills
+// post-boss ascension: endless horde until HORDE_GOAL total horde kills
+const HORDE_INTERVAL = 10, HORDE_WAVE = 10, HORDE_GOAL = 200, HORDE_MAX_ALIVE = 34;
+// escalation: after this many SMALL horde kills, every wave also brings admirals
+const HORDE_ADMIRAL_AFTER = 20, HORDE_ADMIRALS = 3;
+let playerMaxHp = PLAYER_HP; // becomes 10x after ascension
+let hordeKills = 0;
+let hordeSmallKills = 0; // small-ship kills during the horde phase (admiral-wave trigger)
+let boss = null;
+let bossSpawned = false;
+let enemiesKilled = 0;
+
+function makeVessel(kind, size, tint, x, z, yaw){
+  const {group, lineMats, hullMat} = makeShip(size, tint);
+  group.position.set(x, 0.35, z);
+  group.rotation.y = yaw;
+  scene.add(group);
+  return {
+    kind, group, lineMats, hullMat,
+    yaw, speed:0, hp: kind==='player'?PLAYER_HP:ENEMY_HP,
+    bob: Math.random()*6, hitFlash:0,
+    alive:true, sinking:false, sinkT:0,
+    // AI
+    cool: 1.5+Math.random()*2, strafe: Math.random()<0.5?1:-1,
+    wakeAcc:0,
+  };
+}
+
+let player = null;
+const enemies = [];
+
+function spawnAll(){
+  player = makeVessel('player', 4.2, new THREE.Color(0xFFB07A), 0, 0, Math.PI);
+  const tints = [0x9AD2FF, 0x5AA9FF, 0x9AD2FF, 0x7FB6FF, 0x5AA9FF];
+  for(let i=0;i<N_ENEMIES;i++){
+    const a = (i/N_ENEMIES)*Math.PI*2 + Math.random()*0.6;
+    const r = 24 + Math.random()*12;
+    const x = Math.sin(a)*r, z = Math.cos(a)*r;
+    const e = makeVessel('enemy', 3.4, new THREE.Color(tints[i]), x, z, Math.random()*Math.PI*2);
+    enemies.push(e);
+  }
+}
+
+// ====================== BOSS SPAWN ======================
+function spawnBoss(){
+  if(bossSpawned) return;
+  bossSpawned = true;
+  // place boss far ahead of the player
+  const angle = player.yaw + Math.PI + (Math.random()-0.5)*0.4;
+  const dist = 38 + Math.random()*8;
+  const x = player.group.position.x + Math.sin(angle)*dist;
+  const z = player.group.position.z + Math.cos(angle)*dist;
+  const {group, lineMats, hullMat} = makeShip(BOSS_SIZE, new THREE.Color(0xFF2850));
+  group.position.set(x, 0.35, z);
+  group.rotation.y = angle + Math.PI;
+  scene.add(group);
+  boss = {
+    kind:'enemy', isBoss:true, group, lineMats, hullMat,
+    yaw: angle+Math.PI, speed:0, hp:BOSS_HP, maxHp:BOSS_HP,
+    bob:0, hitFlash:0, alive:true, sinking:false, sinkT:0,
+    cool:3.0, strafe:1, wakeAcc:0,
+    phase:'approach',   // approach → circle → ram
+    phaseT:0,
+    riseT:0,            // rise-in from below the sea
+  };
+  // start below sea level and rise in dramatically
+  group.position.y = -5;
+  // show boss HUD
+  $('bossLabel').classList.add('visible');
+  $('bosshpwrap').classList.add('visible');
+  $('bosshpbar').style.width = '100%';
+  // show alert banner
+  const alert = $('bossAlert');
+  alert.classList.add('show');
+  boom(0.6); boom(0.55); // double explosion
+  setTimeout(()=>alert.classList.remove('show'), 2800);
+  // screen shake via camera
+  state.bossShake = 0.35;
+}
+
+// ====================== INPUT ======================
+const keys = {};
+addEventListener('keydown', e=>{
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
+  keys[e.code]=true;
+  if(e.code==='Space') wantFire = true;
+  if(e.code==='KeyQ') wantTorpedo = true;
+});
+addEventListener('keyup', e=>{ keys[e.code]=false; });
+let wantFire = false;
+let wantTorpedo = false;
+canvas.addEventListener('pointerdown', ()=>{ wantFire = true; });
+
+// touch joystick
+const joy = $('joy'), joyKnob = $('joyKnob');
+let joyVec = {x:0,y:0}, joyId = null;
+joy.addEventListener('pointerdown', ev=>{ joyId=ev.pointerId; joy.setPointerCapture(joyId); joyMove(ev); });
+joy.addEventListener('pointermove', ev=>{ if(ev.pointerId===joyId) joyMove(ev); });
+function joyEnd(ev){ if(ev.pointerId===joyId){ joyId=null; joyVec={x:0,y:0}; joyKnob.style.transform='translate(0,0)'; } }
+joy.addEventListener('pointerup', joyEnd); joy.addEventListener('pointercancel', joyEnd);
+function joyMove(ev){
+  const r = joy.getBoundingClientRect();
+  let dx = (ev.clientX-(r.left+r.width/2))/(r.width/2), dy = (ev.clientY-(r.top+r.height/2))/(r.height/2);
+  const len = Math.hypot(dx,dy); if(len>1){ dx/=len; dy/=len; }
+  joyVec = {x:dx, y:dy};
+  joyKnob.style.transform = `translate(${dx*38}px,${dy*38}px)`;
+}
+$('fireBtn').addEventListener('pointerdown', ev=>{ ev.stopPropagation(); wantFire = true; });
+$('torpBtn').addEventListener('pointerdown', ev=>{ ev.stopPropagation(); wantTorpedo = true; });
+
+// ====================== CANNONBALLS / FX ======================
+const ballGeo = new THREE.SphereGeometry(0.14, 8, 8);
+const balls = [];      // {mesh, vel, owner, life}
+const G = 9.5;
+
+// tiny synth cannon boom (WebAudio, init on first shot; fail-silent)
+let actx = null;
+function boom(vol){
+  try{
+    if(!actx){ const AC = window.AudioContext||window.webkitAudioContext; if(!AC) return; actx = new AC(); }
+    if(actx.state==='suspended') actx.resume();
+    const len = actx.sampleRate*0.35;
+    const buf = actx.createBuffer(1, len, actx.sampleRate);
+    const d = buf.getChannelData(0);
+    for(let i=0;i<len;i++){ d[i] = (Math.random()*2-1) * Math.pow(1-i/len, 2.6); }
+    const src = actx.createBufferSource(); src.buffer = buf;
+    const lp = actx.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=420;
+    const gg = actx.createGain(); gg.gain.value = vol;
+    src.connect(lp); lp.connect(gg); gg.connect(actx.destination);
+    src.start();
+  }catch(e){}
+}
+
+function fireBall(fromV, dirV, speed, elev, owner, color){
+  const mesh = new THREE.Mesh(ballGeo, new THREE.MeshBasicMaterial({color, transparent:true, opacity:0.95}));
+  mesh.position.copy(fromV);
+  scene.add(mesh);
+  const vel = dirV.clone().normalize().multiplyScalar(speed*Math.cos(elev));
+  vel.y = speed*Math.sin(elev);
+  balls.push({mesh, vel, owner, life:5});
+  // muzzle flash
+  spawnFlash(fromV, owner==='player'?0xFFB07A: (owner==='boss'?0xFF2850:0x9AD2FF), 0.5);
+}
+
+// broadside: 3 balls from each side of the ship
+let fireCool = 0;
+const FIRE_CD = 0.9;
+function playerBroadside(){
+  if(fireCool>0 || !player.alive) return;
+  fireCool = FIRE_CD;
+  const fwd = new THREE.Vector3(Math.sin(player.yaw),0,Math.cos(player.yaw));
+  const right = new THREE.Vector3(fwd.z,0,-fwd.x);
+  for(const side of [1,-1]){
+    for(let i=0;i<3;i++){
+      const off = fwd.clone().multiplyScalar((i-1)*1.1);
+      const from = player.group.position.clone().add(off).add(right.clone().multiplyScalar(side*0.7));
+      from.y += 0.55;
+      const dir = right.clone().multiplyScalar(side).add(fwd.clone().multiplyScalar((Math.random()-0.5)*0.14));
+      fireBall(from, dir, 13.5, 0.34+(Math.random()-0.5)*0.05, 'player', 0xFFC79A);
+    }
+  }
+  boom(0.35);
+}
+
+// enemy aimed shot at the player (ballistic elevation for range + aim error)
+function enemyFire(e){
+  const from = e.group.position.clone(); from.y += 0.55;
+  const target = player.group.position.clone();
+  target.x += (Math.random()-0.5)*4.5;   // aim error → dodgeable
+  target.z += (Math.random()-0.5)*4.5;
+  const d = target.clone().sub(from); d.y = 0;
+  const dist = d.length();
+  const v = 14;
+  const s = Math.min(1, dist*G/(v*v));
+  const elev = 0.5*Math.asin(s);
+  fireBall(from, d, v, elev, 'enemy', 0x9AD2FF);
+  boom(0.16);
+}
+
+// heavy broadside (boss + wave-admirals): 5 balls each side, tighter spread
+function bossVolley(v){
+  if(!v || !v.alive || !player.alive) return;
+  const fwd = new THREE.Vector3(Math.sin(v.yaw),0,Math.cos(v.yaw));
+  const right = new THREE.Vector3(fwd.z,0,-fwd.x);
+  for(const side of [1,-1]){
+    for(let i=0;i<5;i++){
+      const off = fwd.clone().multiplyScalar((i-2)*1.9);
+      const from = v.group.position.clone().add(off).add(right.clone().multiplyScalar(side*1.8));
+      from.y += 0.9;
+      // aim error for boss is smaller — it's scary accurate
+      const target = player.group.position.clone();
+      target.x += (Math.random()-0.5)*2.5; target.z += (Math.random()-0.5)*2.5;
+      const dir = target.clone().sub(from); dir.y=0;
+      const dist = dir.length(), vel=15;
+      const s=Math.min(1, dist*G/(vel*vel));
+      const elev = 0.5*Math.asin(s);
+      fireBall(from, dir.normalize().add(right.clone().multiplyScalar(side*0.6)).normalize(), vel, elev, 'boss', 0xFF2850);
+    }
+  }
+  boom(0.55);
+}
+function bossFire(){ bossVolley(boss); }
+
+// ====================== WEAPON: LASER (hold E) ======================
+const LASER_RANGE = 30, LASER_DPS = 15, LASER_MAX_HEAT = 4.0, LASER_COOLOFF = 3.0; // 15 HP/s (5x buffed), heat keeps it honest
+const N_BEAMS = 10; // radial beam count after ascension (pre-ascension: only beam 0)
+const laser = { firing:false, held:0, overheat:0, dmgAccs:new Array(N_BEAMS).fill(0), osc:null, gainNode:null };
+const laserBeams = []; // pooled {line, geo, mat}; beam 0 = normal bow laser
+for(let i=0;i<N_BEAMS;i++){
+  const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0,0,1)]);
+  const mat = new THREE.LineBasicMaterial({color:0x00FFEE, transparent:true, opacity:0.9});
+  const line = new THREE.Line(geo, mat);
+  line.visible = false; line.frustumCulled = false; scene.add(line);
+  laserBeams.push({line, geo, mat});
+}
+const muzzleGlow = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 10),
+  new THREE.MeshBasicMaterial({color:0x00FFEE, transparent:true, opacity:0.9, depthWrite:false}));
+muzzleGlow.visible = false; scene.add(muzzleGlow);
+
+// laser hum: sawtooth ~180hz, gain 0.016 (5x quieter than the old 0.08), fade in/out (fail-silent like boom)
+function laserSoundStart(){
+  try{
+    if(!actx){ const AC = window.AudioContext||window.webkitAudioContext; if(!AC) return; actx = new AC(); }
+    if(actx.state==='suspended') actx.resume();
+    const osc = actx.createOscillator(); osc.type='sawtooth'; osc.frequency.value = 180;
+    const g = actx.createGain(); g.gain.value = 0;
+    g.gain.linearRampToValueAtTime(0.016, actx.currentTime + 0.12);
+    osc.connect(g); g.connect(actx.destination); osc.start();
+    laser.osc = osc; laser.gainNode = g;
+  }catch(e){}
+}
+function laserSoundStop(){
+  try{
+    if(laser.osc){
+      const o = laser.osc, g = laser.gainNode;
+      g.gain.cancelScheduledValues(actx.currentTime);
+      g.gain.setValueAtTime(g.gain.value, actx.currentTime);
+      g.gain.linearRampToValueAtTime(0, actx.currentTime + 0.15);
+      o.stop(actx.currentTime + 0.2);
+      laser.osc = null; laser.gainNode = null;
+    }
+  }catch(e){}
+}
+
+function updateLaser(dt){
+  const held = !!keys.KeyE && player && player.alive && !state.over;
+  if(laser.overheat > 0){
+    laser.overheat -= dt;
+    if(laser.overheat <= 0){ laser.overheat = 0; laser.held = 0; }
+  }
+  const firing = held && laser.overheat <= 0;
+  if(firing && !laser.firing) laserSoundStart();
+  if(!firing && laser.firing) laserSoundStop();
+  laser.firing = firing;
+  if(firing){
+    laser.held += dt;
+    if(laser.held >= LASER_MAX_HEAT){ // overheat: cut out for 3s
+      laser.overheat = LASER_COOLOFF;
+      laser.firing = false;
+      laserSoundStop();
+    }
+  }else if(!held){
+    laser.held = 0; // released → continuous-hold timer resets
+  }
+  const nb = state.ascended ? N_BEAMS : 1; // ascended: 10-beam radial star
+  for(let k=0;k<laserBeams.length;k++) laserBeams[k].line.visible = laser.firing && k<nb;
+  muzzleGlow.visible = laser.firing;
+  if(!laser.firing){ laser.dmgAccs.fill(0); return; }
+
+  // pulse opacity 0.6–1.0 at ~8hz — laser flicker
+  const pulse = 0.8 + 0.2*Math.sin(state.t*Math.PI*2*8);
+  const targets = [...enemies, ...(boss && boss.alive && boss.riseT>=2.0 ? [boss] : [])];
+  for(let k=0;k<nb;k++){
+    // beam k from the bow (or radially around the hull when ascended)
+    const ang = player.yaw + (state.ascended ? k*(Math.PI*2/N_BEAMS) : 0);
+    const fwd = new THREE.Vector3(Math.sin(ang),0,Math.cos(ang));
+    const from = player.group.position.clone().add(fwd.clone().multiplyScalar(state.ascended?3.6:2.0)); from.y += 0.6;
+    // first target inside a ~2u cylinder along the beam (boss uses its big hitbox)
+    let best = null, bestT = LASER_RANGE;
+    for(const v of targets){
+      if(!v.alive || v.sinking) continue;
+      const rel = v.group.position.clone().sub(from); rel.y = 0;
+      const along = rel.dot(fwd);
+      if(along < 0 || along > LASER_RANGE) continue;
+      const perp = rel.sub(fwd.clone().multiplyScalar(along)).length();
+      const rad = (v.isBoss || v.isAdmiral) ? 4.5 : 2.0;
+      if(perp < rad && along < bestT){ bestT = along; best = v; }
+    }
+    const to = from.clone().add(fwd.clone().multiplyScalar(bestT));
+    laserBeams[k].geo.setFromPoints([from, to]);
+    laserBeams[k].mat.opacity = pulse;
+    if(k===0){
+      muzzleGlow.position.copy(from);
+      muzzleGlow.material.opacity = pulse;
+      muzzleGlow.scale.setScalar(1 + 0.25*Math.sin(state.t*50));
+    }
+    // continuous damage ~15 HP/sec on the first intersected target of this beam
+    if(best){
+      laser.dmgAccs[k] += dt*LASER_DPS;
+      while(laser.dmgAccs[k] >= 1 && best.alive){
+        laser.dmgAccs[k] -= 1;
+        damage(best, to.clone());
+      }
+    }else{
+      laser.dmgAccs[k] = 0;
+    }
+  }
+}
+
+// ====================== WEAPON: TORPEDO (Q, homing) ======================
+const TORP_CD = 6, TORP_SPEED = 8, TORP_DMG = 5, TORP_BLAST = 4.5, TORP_TURN = 1.6;
+let torpCool = 0;
+const torpedoes = []; // {mesh, yaw, life, bubbleAcc}
+const torpGeo = new THREE.CylinderGeometry(0.4, 0.4, 1.2, 10);
+torpGeo.rotateX(Math.PI/2); // axis along +Z so rotation.y = heading
+
+// tiny bubble trail dots
+const bubbleGeo = new THREE.SphereGeometry(0.07, 6, 6);
+const bubbles = []; // {mesh,t,dur}
+function spawnBubble(pos){
+  const mesh = new THREE.Mesh(bubbleGeo, new THREE.MeshBasicMaterial({color:0xffffff, transparent:true, opacity:0.6, depthWrite:false}));
+  mesh.position.set(pos.x+(Math.random()-0.5)*0.3, 0.12+Math.random()*0.25, pos.z+(Math.random()-0.5)*0.3);
+  scene.add(mesh);
+  bubbles.push({mesh, t:0, dur:0.9});
+}
+
+function fireTorpedo(){
+  if(torpCool>0 || !player || !player.alive || !state.running || state.over) return;
+  torpCool = TORP_CD;
+  // ascended: 5-torpedo fan spread, each homes independently
+  const offsets = state.ascended ? [-0.5,-0.25,0,0.25,0.5] : [0];
+  for(const off of offsets){
+    const yw = player.yaw + off;
+    const fwd = new THREE.Vector3(Math.sin(yw),0,Math.cos(yw));
+    const from = player.group.position.clone().add(fwd.multiplyScalar(state.ascended?3.6:2.2)); from.y = 0.4;
+    const mesh = new THREE.Mesh(torpGeo, new THREE.MeshBasicMaterial({color:0xFFD700, transparent:true, opacity:0.95}));
+    mesh.position.copy(from); mesh.rotation.y = yw;
+    scene.add(mesh);
+    torpedoes.push({mesh, yaw:yw, life:14, bubbleAcc:0});
+    spawnFlash(from, 0xFFD700, 0.4);
+  }
+  boom(0.3);
+}
+
+function detonateTorpedo(pos){
+  // massive explosion: big splash + 3 flashes + screen shake
+  spawnSplash(pos, 0xFFD700, true);
+  spawnFlash(pos, 0xFFD700, 0.5);
+  spawnFlash(pos.clone().add(new THREE.Vector3(0.6,0.4,0.3)), 0xffffff, 0.4);
+  spawnFlash(pos.clone().add(new THREE.Vector3(-0.5,0.7,-0.4)), 0xFF8A4C, 0.45);
+  state.bossShake = Math.max(state.bossShake, 0.3);
+  boom(0.7);
+  // 5 damage to any enemy/boss within blast radius
+  const targets = [...enemies, ...(boss && boss.alive && boss.riseT>=2.0 ? [boss] : [])];
+  for(const v of targets){
+    if(!v.alive || v.sinking) continue;
+    const d = Math.hypot(pos.x-v.group.position.x, pos.z-v.group.position.z);
+    if(d < TORP_BLAST){
+      for(let i=0;i<TORP_DMG && v.alive;i++) damage(v, pos.clone());
+    }
+  }
+}
+
+function updateTorpedoes(dt){
+  for(let i=torpedoes.length-1;i>=0;i--){
+    const tp = torpedoes[i];
+    const p = tp.mesh.position;
+    // homing: steer toward the nearest live target
+    let tgt = null, tgtD = Infinity;
+    const targets = [...enemies, ...(boss && boss.alive && boss.riseT>=2.0 ? [boss] : [])];
+    for(const v of targets){
+      if(!v.alive || v.sinking) continue;
+      const d = Math.hypot(v.group.position.x-p.x, v.group.position.z-p.z);
+      if(d < tgtD){ tgtD = d; tgt = v; }
+    }
+    if(tgt){
+      const desired = Math.atan2(tgt.group.position.x-p.x, tgt.group.position.z-p.z);
+      const dd = shortAngle(tp.yaw, desired);
+      tp.yaw += Math.max(-TORP_TURN*dt, Math.min(TORP_TURN*dt, dd));
+    }
+    p.x += Math.sin(tp.yaw)*TORP_SPEED*dt;
+    p.z += Math.cos(tp.yaw)*TORP_SPEED*dt;
+    p.y = 0.4; // stays at sea level, no arc
+    tp.mesh.rotation.y = tp.yaw;
+    tp.life -= dt;
+    // bubble trail
+    tp.bubbleAcc += dt;
+    if(tp.bubbleAcc > 0.06){
+      tp.bubbleAcc = 0;
+      const back = new THREE.Vector3(-Math.sin(tp.yaw),0,-Math.cos(tp.yaw)).multiplyScalar(0.8).add(p);
+      spawnBubble(back);
+    }
+    // proximity detonation
+    let hit = false;
+    for(const v of targets){
+      if(!v.alive || v.sinking) continue;
+      const d = Math.hypot(v.group.position.x-p.x, v.group.position.z-p.z);
+      if(d < ((v.isBoss || v.isAdmiral) ? 4.5 : 1.8)){ hit = true; break; }
+    }
+    const r = Math.hypot(p.x, p.z);
+    if(hit){ detonateTorpedo(p.clone()); }
+    else if(tp.life<=0 || r>ARENA_R+4){ spawnSplash(p, 0xFFD700, false); }
+    if(hit || tp.life<=0 || r>ARENA_R+4){
+      scene.remove(tp.mesh); tp.mesh.material.dispose();
+      torpedoes.splice(i,1);
+    }
+  }
+}
+
+// weapons HUD row
+const laserStatEl = $('laserStat'), torpStatEl = $('torpStat');
+function updateWeaponHUD(){
+  if(laser.overheat > 0){
+    laserStatEl.textContent = 'перегрев ' + Math.ceil(laser.overheat) + 'с';
+    laserStatEl.style.color = '#FF8A4C';
+  }else{
+    laserStatEl.textContent = laser.firing ? 'огонь' : 'готов';
+    laserStatEl.style.color = '#00FFEE';
+  }
+  if(torpCool > 0){
+    torpStatEl.textContent = Math.ceil(torpCool) + 'с';
+    torpStatEl.style.color = '#9fb3d1';
+  }else{
+    torpStatEl.textContent = 'готова';
+    torpStatEl.style.color = '#FFD700';
+  }
+}
+
+// splash rings on water impact
+const rings = [];  // {mesh, t, dur, scale0, scale1}
+const ringGeo = new THREE.RingGeometry(0.6, 0.78, 26);
+function spawnSplash(pos, color, big){
+  const mesh = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({color:color||0x9AD2FF, transparent:true, opacity:0.7, side:THREE.DoubleSide, depthWrite:false}));
+  mesh.rotation.x = -Math.PI/2;
+  mesh.position.set(pos.x, 0.06, pos.z);
+  scene.add(mesh);
+  rings.push({mesh, t:0, dur: big?1.1:0.7, scale0:0.4, scale1: big?4.2:2.2});
+}
+// quick flash sphere (muzzle / hit)
+const flashes = []; // {mesh,t,dur}
+const flashGeo = new THREE.SphereGeometry(0.3, 8, 8);
+function spawnFlash(pos, color, dur){
+  const mesh = new THREE.Mesh(flashGeo, new THREE.MeshBasicMaterial({color, transparent:true, opacity:0.9, depthWrite:false}));
+  mesh.position.copy(pos);
+  scene.add(mesh);
+  flashes.push({mesh, t:0, dur:dur||0.3});
+}
+
+// wake trail dots behind moving ships
+const wakeGeo = new THREE.CircleGeometry(0.28, 10);
+const wakes = []; // {mesh,t,dur}
+function spawnWake(v){
+  const fwd = new THREE.Vector3(Math.sin(v.yaw),0,Math.cos(v.yaw));
+  const p = v.group.position.clone().sub(fwd.multiplyScalar(v.kind==='player'?2.1:1.7));
+  const mesh = new THREE.Mesh(wakeGeo, new THREE.MeshBasicMaterial({color:0x7FC0FF, transparent:true, opacity:0.28, depthWrite:false}));
+  mesh.rotation.x = -Math.PI/2;
+  mesh.position.set(p.x + (Math.random()-0.5)*0.5, 0.04, p.z + (Math.random()-0.5)*0.5);
+  scene.add(mesh);
+  wakes.push({mesh, t:0, dur:1.6});
+}
+
+// ====================== DAMAGE / SINKING ======================
+function damage(v, at){
+  if(!v.alive || v.sinking) return;
+  v.hp--;
+  v.hitFlash = v.isBoss ? 0.28 : 0.18;
+  spawnFlash(at, 0xffffff, v.isBoss?0.35:0.22);
+  spawnSplash(v.group.position, (v.isBoss||v.isAdmiral)?0xFF2850:(v.kind==='enemy'?0xFFB07A:0x9AD2FF), v.isBoss?true:false);
+  if(v.kind==='player'){
+    $('hpbar').style.width = Math.max(0, v.hp/playerMaxHp*100)+'%';
+    const w = $('hpwrap'); w.classList.remove('hurt'); void w.offsetWidth; w.classList.add('hurt');
+  }else{
+    state.score += v.isBoss ? 50 : 100;
+    $('score').textContent = state.score;
+    if(v.isBoss) $('bosshpbar').style.width = Math.max(0, v.hp/BOSS_HP*100)+'%';
+  }
+  if(v.hp<=0){ startSink(v); }
+}
+function startSink(v){
+  v.sinking = true; v.sinkT = 0; v.alive = false;
+  spawnSplash(v.group.position, 0xEAF2FF, true);
+  boom(v.isBoss ? 0.8 : 0.4);
+  if(v.isBoss){
+    // extra splash spectacle for boss death
+    setTimeout(()=>spawnSplash(v.group.position, 0xFF2850, true), 200);
+    setTimeout(()=>spawnSplash(v.group.position, 0xEAF2FF, true), 450);
+    boom(0.7); boom(0.6);
+    state.score += 1500;
+    $('score').textContent = state.score;
+    $('bossLabel').classList.remove('visible');
+    $('bosshpwrap').classList.remove('visible');
+    // boss down → the player ASCENDS (horde phase), not game over
+    setTimeout(ascend, 1400);
+  }else if(v.kind==='enemy'){
+    enemiesKilled++;
+    state.score += v.isAdmiral ? 500 : 250;
+    $('score').textContent = state.score;
+    const left = enemies.filter(e=>e.alive).length;
+    $('enemies').textContent = left;
+    if(state.ascended){
+      registerHordeKill(v.isAdmiral);
+    }else{
+      // trigger boss at BOSS_TRIGGER kills if boss not yet spawned
+      if(enemiesKilled >= BOSS_TRIGGER && !bossSpawned){
+        setTimeout(spawnBoss, 1200);
+      }
+      // pre-boss win path only applies if the boss never spawned
+      if(left===0 && !bossSpawned){
+        endGame(true);
+      }
+    }
+  }else{
+    endGame(false);
+  }
+}
+function updateSink(v, dt){
+  v.sinkT += dt;
+  const k = Math.min(v.sinkT/2.2, 1);
+  v.group.position.y = 0.35 - k*k*3.2;
+  v.group.rotation.x = k*0.5;                     // nose dips
+  v.group.rotation.z += dt*0.25*(v.strafe||1);    // slow heel
+  const op = Math.max(0, 0.95*(1-k));
+  for(const m of v.lineMats) m.opacity = op;
+  v.hullMat.opacity = 0.12*(1-k);
+  if(k>=1){
+    scene.remove(v.group); v.gone = true;
+    // free per-ship materials (geometries are shared with the template — keep those)
+    for(const m of v.lineMats) m.dispose();
+    v.hullMat.dispose();
+  }
+}
+
+// ====================== ASCENSION (post-boss) + ENDLESS HORDE ======================
+let halo = null, lightColumn = null, ascendLight = null;
+function ascend(){
+  if(state.ascended || state.over || !player || !player.alive) return;
+  state.ascended = true;
+  // 10x HP — near-invincible
+  playerMaxHp = PLAYER_HP*10;
+  player.hp = playerMaxHp;
+  $('hpbar').style.width = '100%';
+  // 2x bigger
+  player.group.scale.multiplyScalar(2);
+  // glow: ember/gold wireframe + additive halo + light column + point light
+  const gold = new THREE.Color(0xFFD780);
+  for(const m of player.lineMats){ m.userData.baseColor = gold.clone(); m.color.copy(gold); }
+  halo = new THREE.Mesh(new THREE.SphereGeometry(5.4, 20, 20),
+    new THREE.MeshBasicMaterial({color:0xFFC24C, transparent:true, opacity:0.16, depthWrite:false, blending:THREE.AdditiveBlending}));
+  scene.add(halo);
+  lightColumn = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 2.6, 26, 18, 1, true),
+    new THREE.MeshBasicMaterial({color:0xFFD780, transparent:true, opacity:0.13, depthWrite:false, side:THREE.DoubleSide, blending:THREE.AdditiveBlending}));
+  scene.add(lightColumn);
+  ascendLight = new THREE.PointLight(0xFFB84C, 2.4, 42);
+  scene.add(ascendLight);
+  // banner + shake + thunder
+  const al = $('ascendAlert');
+  al.classList.add('show');
+  setTimeout(()=>al.classList.remove('show'), 3400);
+  state.bossShake = 0.35;
+  boom(0.7); boom(0.5);
+  // horde HUD + first wave shortly after the banner
+  $('hordeStat').style.display = 'block';
+  $('hordeKills').textContent = hordeKills;
+  state.hordeTimer = 4.0;
+}
+
+// spawn a wave of enemies on an offscreen ring around the player, converging in
+function spawnHordeWave(){
+  if(!player || !player.alive || state.over) return;
+  const withAdmirals = hordeSmallKills >= HORDE_ADMIRAL_AFTER; // escalation threshold
+  const alive = enemies.filter(e=>e.alive).length;
+  const reserve = withAdmirals ? HORDE_ADMIRALS : 0; // keep room for the admirals under the cap
+  const n = Math.min(HORDE_WAVE, Math.max(0, HORDE_MAX_ALIVE - reserve - alive)); // concurrency cap
+  const tints = [0x9AD2FF, 0x5AA9FF, 0x7FB6FF];
+  const pp = player.group.position;
+  for(let i=0;i<n;i++){
+    const a = (i/HORDE_WAVE)*Math.PI*2 + Math.random()*0.5;
+    const r = 44 + Math.random()*10;
+    const e = makeVessel('enemy', 3.4, new THREE.Color(tints[i%3]), pp.x + Math.sin(a)*r, pp.z + Math.cos(a)*r, a + Math.PI);
+    enemies.push(e);
+  }
+  // after 20 small kills every wave also brings 3 admirals (big red heavy ships)
+  if(withAdmirals){
+    const na = Math.min(HORDE_ADMIRALS, Math.max(0, HORDE_MAX_ALIVE - (alive + n)));
+    for(let i=0;i<na;i++){
+      const a = Math.random()*Math.PI*2;
+      const r = 48 + Math.random()*8;
+      const e = makeVessel('enemy', BOSS_SIZE, new THREE.Color(0xFF2850), pp.x + Math.sin(a)*r, pp.z + Math.cos(a)*r, a + Math.PI);
+      e.isAdmiral = true;
+      e.hp = BOSS_HP;
+      e.cool = 3.2 + Math.random()*1.6;
+      enemies.push(e);
+    }
+  }
+  $('enemies').textContent = enemies.filter(e=>e.alive).length;
+}
+
+function registerHordeKill(isAdmiral){
+  hordeKills++;
+  if(!isAdmiral) hordeSmallKills++;
+  $('hordeKills').textContent = hordeKills;
+  if(hordeKills >= HORDE_GOAL) endGame(true);
+}
+
+function endGame(won){
+  if(state.over) return;
+  state.over = true;
+  setTimeout(()=>{
+    if(won && state.ascended){
+      $('endEyebrow').textContent = '◆ 200 кораблей на дне';
+      $('endTitle').innerHTML = 'Море <span class="g">твоё.</span> Флот <span class="e">твой.</span>';
+      $('endSub').textContent = 'Командующий подтверждён: адмирал и двести кораблей на дне. Настоящий флот fleetbox воюет за тебя так же — только с задачами.';
+    }else{
+      $('endEyebrow').textContent = won ? '◆ вражеский флот на дне' : '◆ корабль потерян';
+      $('endTitle').innerHTML = won ? 'Море <span class="g">твоё.</span>' : 'Ты <span class="e">потоплен.</span>';
+      $('endSub').textContent = won
+        ? 'Весь вражеский флот потоплен. Настоящий флот fleetbox воюет за тебя так же — только с задачами.'
+        : 'Вражеский флот оказался проворнее. Перегруппируйся и попробуй ещё раз.';
+    }
+    $('finalScore').textContent = 'очки: ' + state.score;
+    $('endOverlay').classList.remove('hidden');
+  }, won?900:1600);
+}
+$('restartBtn').addEventListener('click', ()=>location.reload());
+
+// ====================== START ======================
+$('startBtn').addEventListener('click', ()=>{
+  const go = ()=>{
+    $('startOverlay').classList.add('hidden');
+    spawnAll();
+    state.running = true;
+    wantFire = false;
+  };
+  if(TPL) go(); else pendingStart.push(go);
+});
+
+// ====================== UPDATE ======================
+function shortAngle(a,b){ let d=(b-a)%(Math.PI*2); if(d>Math.PI)d-=Math.PI*2; if(d<-Math.PI)d+=Math.PI*2; return d; }
+
+function updatePlayer(dt){
+  const v = player;
+  if(v.sinking){ updateSink(v, dt); return; }
+  // throttle / steer (keys + joystick)
+  let thr = 0, steer = 0;
+  if(keys.KeyW||keys.ArrowUp) thr += 1;
+  if(keys.KeyS||keys.ArrowDown) thr -= 0.6;
+  if(keys.KeyA||keys.ArrowLeft) steer += 1;
+  if(keys.KeyD||keys.ArrowRight) steer -= 1;
+  thr += -joyVec.y; steer += -joyVec.x;
+  thr = Math.max(-0.6, Math.min(1, thr));
+  steer = Math.max(-1, Math.min(1, steer));
+
+  const MAXS = 10;
+  const target = thr*MAXS;
+  v.speed += (target - v.speed)*Math.min(1, dt*1.6);
+  v.yaw += steer * 1.5 * dt * (0.35 + Math.min(1, Math.abs(v.speed)/MAXS)*0.75);
+
+  v.group.position.x += Math.sin(v.yaw)*v.speed*dt;
+  v.group.position.z += Math.cos(v.yaw)*v.speed*dt;
+
+  // soft arena clamp
+  const p = v.group.position, r = Math.hypot(p.x,p.z);
+  if(r>ARENA_R){ p.x *= ARENA_R/r; p.z *= ARENA_R/r; }
+
+  v.group.rotation.y = v.yaw;
+  // heel into the turn a touch (on top of the wave roll set later)
+  v.heel = steer * Math.min(1, Math.abs(v.speed)/MAXS) * -0.10;
+
+  if(wantFire){ playerBroadside(); }
+  fireCool = Math.max(0, fireCool - dt);
+
+  // wake
+  if(Math.abs(v.speed)>2){
+    v.wakeAcc += dt;
+    if(v.wakeAcc>0.09){ v.wakeAcc=0; spawnWake(v); }
+  }
+}
+
+function updateEnemy(e, dt){
+  if(e.sinking){ updateSink(e, dt); return; }
+  if(!player.alive){ e.speed += (0-e.speed)*dt; return; }
+  const pp = player.group.position, ep = e.group.position;
+  const dx = pp.x-ep.x, dz = pp.z-ep.z;
+  const dist = Math.hypot(dx,dz);
+  // desired heading: approach when far, circle broadside-ish when near
+  let desired;
+  if(dist > 16) desired = Math.atan2(dx,dz);                       // chase
+  else if(dist < 7) desired = Math.atan2(-dx,-dz);                 // too close → open range
+  else desired = Math.atan2(dx,dz) + e.strafe*Math.PI/2*0.85;      // circle
+  const d = shortAngle(e.yaw, desired);
+  const turn = e.isAdmiral ? 0.7 : 1.0; // admirals are heavy — slower rudder
+  e.yaw += Math.max(-turn*dt, Math.min(turn*dt, d));
+  const sp = (dist>16 ? 6.5 : 5.0) * (e.isAdmiral ? 0.8 : 1);
+  e.speed += (sp - e.speed)*Math.min(1, dt*1.2);
+  ep.x += Math.sin(e.yaw)*e.speed*dt;
+  ep.z += Math.cos(e.yaw)*e.speed*dt;
+  const r = Math.hypot(ep.x,ep.z);
+  if(r>ARENA_R){ ep.x *= ARENA_R/r; ep.z *= ARENA_R/r; }
+  e.group.rotation.y = e.yaw;
+  // occasionally flip circling direction
+  if(Math.random() < dt*0.08) e.strafe *= -1;
+  // fire — admirals unload the heavy 5-ball volley, small ships a single aimed shot
+  e.cool -= dt;
+  if(e.cool<=0 && dist<(e.isAdmiral?30:26) && player.alive){
+    if(e.isAdmiral){
+      e.cool = 3.4 + Math.random()*1.6;
+      bossVolley(e);
+    }else{
+      e.cool = 2.6 + Math.random()*2.2;
+      enemyFire(e);
+    }
+  }
+  // wake
+  e.wakeAcc += dt;
+  if(e.wakeAcc>0.14 && e.speed>2){ e.wakeAcc=0; spawnWake(e); }
+}
+
+function updateBoss(dt){
+  if(!boss) return;
+  const b = boss;
+  // rise-in animation first 2 seconds
+  if(b.riseT < 2.0){
+    b.riseT += dt;
+    b.group.position.y = -5 + Math.min(1, b.riseT/2.0) * 5.35;
+    return; // don't move until fully surfaced
+  }
+  if(b.sinking){ updateSink(b, dt); return; }
+  if(!player.alive){ b.speed += (0-b.speed)*dt; return; }
+  const pp = player.group.position, ep = b.group.position;
+  const dx = pp.x-ep.x, dz = pp.z-ep.z;
+  const dist = Math.hypot(dx,dz);
+  b.phaseT += dt;
+  // boss phases: approach → aggressive circle → periodic charge
+  let desired, targetSpeed;
+  if(dist > 30){ b.phase='approach'; }
+  else if(dist < 10 && Math.random()<dt*0.05){ b.phase='circle'; }
+  if(b.phase==='approach'){
+    desired = Math.atan2(dx,dz);
+    targetSpeed = 8.0;
+  }else{
+    // circle while facing the player broadside
+    desired = Math.atan2(dx,dz) + b.strafe*Math.PI/2*0.9;
+    targetSpeed = 6.5;
+  }
+  // slam into circling direction periodically
+  if(b.phaseT > 6.0 && Math.random()<dt*0.04){ b.strafe*=-1; b.phaseT=0; }
+  const d = shortAngle(b.yaw, desired);
+  b.yaw += Math.max(-1.4*dt, Math.min(1.4*dt, d));
+  b.speed += (targetSpeed - b.speed)*Math.min(1, dt*1.0);
+  ep.x += Math.sin(b.yaw)*b.speed*dt;
+  ep.z += Math.cos(b.yaw)*b.speed*dt;
+  const r = Math.hypot(ep.x,ep.z); if(r>ARENA_R){ ep.x*=ARENA_R/r; ep.z*=ARENA_R/r; }
+  ep.y = 0.38; // wave bob applied later
+  b.group.rotation.y = b.yaw;
+  // boss fire — faster rate, shorter range check
+  b.cool -= dt;
+  if(b.cool<=0 && dist<30 && player.alive){
+    b.cool = 2.6 + Math.random()*1.4; // gentler rate so laser+torpedo can win the duel
+    bossFire();
+  }
+  // wake
+  b.wakeAcc += dt;
+  if(b.wakeAcc>0.08 && b.speed>2){ b.wakeAcc=0; spawnWake(b); }
+}
+
+function updateBalls(dt){
+  for(let i=balls.length-1;i>=0;i--){
+    const b = balls[i];
+    b.vel.y -= G*dt;
+    b.mesh.position.addScaledVector(b.vel, dt);
+    b.life -= dt;
+    const bp = b.mesh.position;
+    let dead = false;
+    // ship hits
+    if(b.owner==='player'){
+      for(const e of enemies){
+        if(!e.alive) continue;
+        const d = Math.hypot(bp.x-e.group.position.x, bp.z-e.group.position.z);
+        const hb = e.isAdmiral ? 4.5 : 1.8, hy = e.isAdmiral ? 4.5 : 2.2;
+        if(d < hb && bp.y < hy){ damage(e, bp.clone()); dead = true; break; }
+      }
+      // boss hit — larger hitbox (it's huge)
+      if(!dead && boss && boss.alive && boss.riseT>=2.0){
+        const d = Math.hypot(bp.x-boss.group.position.x, bp.z-boss.group.position.z);
+        if(d < 4.5 && bp.y < 4.5){ damage(boss, bp.clone()); dead = true; }
+      }
+    }else if(b.owner==='boss' && player.alive){
+      const d = Math.hypot(bp.x-player.group.position.x, bp.z-player.group.position.z);
+      if(d < 2.0 && bp.y < 2.4){ damage(player, bp.clone()); dead = true; }
+    }else if(b.owner==='enemy' && player.alive){
+      const d = Math.hypot(bp.x-player.group.position.x, bp.z-player.group.position.z);
+      if(d < 2.0 && bp.y < 2.4){ damage(player, bp.clone()); dead = true; }
+    }
+    // water
+    if(!dead && bp.y <= waveHeight(bp.x, bp.z, state.t)*0.35 + 0.05){
+      spawnSplash(bp, b.owner==='player'?0x9AD2FF:0x7FC0FF, false);
+      dead = true;
+    }
+    if(dead || b.life<=0){
+      scene.remove(b.mesh); b.mesh.material.dispose();
+      balls.splice(i,1);
+    }
+  }
+}
+
+function updateFX(dt){
+  for(let i=rings.length-1;i>=0;i--){
+    const r = rings[i]; r.t += dt;
+    const k = r.t/r.dur;
+    if(k>=1){ scene.remove(r.mesh); r.mesh.material.dispose(); rings.splice(i,1); continue; }
+    const s = r.scale0 + (r.scale1-r.scale0)*k;
+    r.mesh.scale.setScalar(s);
+    r.mesh.material.opacity = 0.7*(1-k);
+  }
+  for(let i=flashes.length-1;i>=0;i--){
+    const f = flashes[i]; f.t += dt;
+    const k = f.t/f.dur;
+    if(k>=1){ scene.remove(f.mesh); f.mesh.material.dispose(); flashes.splice(i,1); continue; }
+    f.mesh.scale.setScalar(1 + k*2.2);
+    f.mesh.material.opacity = 0.9*(1-k);
+  }
+  for(let i=wakes.length-1;i>=0;i--){
+    const w = wakes[i]; w.t += dt;
+    const k = w.t/w.dur;
+    if(k>=1){ scene.remove(w.mesh); w.mesh.material.dispose(); wakes.splice(i,1); continue; }
+    w.mesh.scale.setScalar(1 + k*2.4);
+    w.mesh.material.opacity = 0.28*(1-k);
+  }
+  for(let i=bubbles.length-1;i>=0;i--){
+    const b = bubbles[i]; b.t += dt;
+    const k = b.t/b.dur;
+    if(k>=1){ scene.remove(b.mesh); b.mesh.material.dispose(); bubbles.splice(i,1); continue; }
+    b.mesh.position.y += dt*0.5; // bubbles rise
+    b.mesh.material.opacity = 0.6*(1-k);
+  }
+}
+
+// hit-flash: lines go white briefly
+function updateFlashTint(v, dt){
+  if(v.hitFlash>0){
+    v.hitFlash -= dt;
+    const on = v.hitFlash>0 && (Math.floor(v.hitFlash*30)%2===0);
+    for(const m of v.lineMats) m.color.set(on ? 0xffffff : m.userData.baseColor);
+    if(v.hitFlash<=0) for(const m of v.lineMats) m.color.set(m.userData.baseColor);
+  }
+}
+
+// ====================== ANIMATE ======================
+const clock = new THREE.Clock();
+let running = true;
+const camPos = new THREE.Vector3(0,8,-16), camLook = new THREE.Vector3();
+
+function animate(){
+  if(!running) return;
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  state.t += dt;
+  const t = state.t;
+
+  // ocean waves — recenter the sheet on the player so the sea feels endless
+  if(player){
+    const px = player.group.position.x, pz = player.group.position.z;
+    ocean.position.x = Math.round(px/CELL)*CELL;
+    ocean.position.z = Math.round(pz/CELL)*CELL;
+    grid.position.x = ocean.position.x; grid.position.z = ocean.position.z;
+  }
+  const posAttr = oceanGeo.attributes.position;
+  for(let i=0;i<posAttr.count;i++){
+    const x=oceanBase[i*3]+ocean.position.x, z=oceanBase[i*3+1]+ocean.position.z;
+    posAttr.array[i*3+2] = waveHeight(x, z, t);
+  }
+  posAttr.needsUpdate = true;
+
+  if(state.running){
+    updatePlayer(dt);
+    for(const e of enemies) if(!e.gone) updateEnemy(e, dt);
+    if(boss && !boss.gone) updateBoss(dt);
+    updateBalls(dt);
+    updateLaser(dt);
+    torpCool = Math.max(0, torpCool - dt);
+    if(wantTorpedo) fireTorpedo();
+    updateTorpedoes(dt);
+    updateWeaponHUD();
+    wantFire = false;
+    wantTorpedo = false;
+    // horde phase: a wave of HORDE_WAVE ships every HORDE_INTERVAL seconds
+    if(state.ascended && !state.over && player.alive){
+      state.hordeTimer -= dt;
+      if(state.hordeTimer <= 0){
+        state.hordeTimer = HORDE_INTERVAL;
+        spawnHordeWave();
+      }
+    }
+    // compact fully-sunk enemies out of the array (perf over 200 kills)
+    for(let i=enemies.length-1;i>=0;i--) if(enemies[i].gone) enemies.splice(i,1);
+  }
+  updateFX(dt);
+
+  // ascension glow follows the player, pulsing
+  if(state.ascended && player && !player.sinking && halo){
+    const gp = player.group.position;
+    halo.position.copy(gp);
+    halo.scale.setScalar(1 + 0.12*Math.sin(t*4));
+    halo.material.opacity = 0.13 + 0.06*Math.sin(t*5);
+    lightColumn.position.set(gp.x, gp.y + 11, gp.z);
+    lightColumn.material.opacity = 0.10 + 0.05*Math.sin(t*3.2);
+    ascendLight.position.set(gp.x, gp.y + 4, gp.z);
+    ascendLight.intensity = 2.0 + 0.8*Math.sin(t*5);
+  }
+
+  // boss shake (on spawn)
+  if(state.bossShake > 0){
+    state.bossShake -= dt;
+  }
+
+  // bob + wave roll for all live vessels (including boss)
+  const all = player ? [player, ...enemies, ...(boss && !boss.gone ? [boss] : [])] : [];
+  for(const v of all){
+    if(v.gone || v.sinking) continue;
+    // boss is rising in — skip wave bob during rise
+    if(v.isBoss && v.riseT < 2.0) continue;
+    const gp = v.group.position;
+    const wh = waveHeight(gp.x, gp.z, t);
+    // boss sits deeper (heavier)
+    const baseY = v.isBoss ? 0.42 : 0.35;
+    const waveAmp = v.isBoss ? 0.22 : 0.35;
+    gp.y = baseY + wh*waveAmp + Math.sin(t*0.9 + v.bob)*0.06;
+    v.group.rotation.z = Math.sin(t*0.8 + v.bob)*0.04 + (v.heel||0);
+    updateFlashTint(v, dt);
+  }
+
+  // camera: chase behind the player (or slow orbit before start / after sinking)
+  if(player && player.alive){
+    const fwd = new THREE.Vector3(Math.sin(player.yaw),0,Math.cos(player.yaw));
+    // small boss-spawn shake offset
+    const shakeAmp = state.bossShake > 0 ? Math.sin(state.t*40)*0.45*(state.bossShake/0.35) : 0;
+    const desired = player.group.position.clone().sub(fwd.clone().multiplyScalar(state.ascended?19:13.5));
+    desired.y = state.ascended ? 10 : 7.2;
+    desired.x += shakeAmp;
+    camPos.lerp(desired, 1-Math.exp(-3.2*dt));
+    camera.position.copy(camPos);
+    camLook.lerp(player.group.position.clone().add(fwd.multiplyScalar(4)).setY(1.2), 1-Math.exp(-4*dt));
+    camera.lookAt(camLook);
+  }else{
+    const a = t*0.06;
+    camera.position.set(Math.sin(a)*18, 8.5, Math.cos(a)*18);
+    camera.lookAt(0, 0.4, 0);
+  }
+
+  renderer.render(scene, camera);
+}
+animate();
+
+document.addEventListener('visibilitychange', ()=>{
+  running = !document.hidden;
+  if(running){ clock.getDelta(); animate(); }
+});
+
+// tiny debug hook for headless verification
+window.__game = { state, get player(){return player;}, enemies, balls, fire:()=>{ wantFire=true; }, get boss(){return boss;}, spawnBoss,
+  laser, laserBeams, torpedoes, keys, fireTorpedo:()=>{ wantTorpedo=true; }, get torpCool(){return torpCool;}, damage,
+  ascend, spawnHordeWave, registerHordeKill,
+  get hordeKills(){return hordeKills;}, _setHordeKills:n=>{ hordeKills=n; $('hordeKills').textContent=n; },
+  get hordeSmallKills(){return hordeSmallKills;}, _setHordeSmallKills:n=>{ hordeSmallKills=n; },
+  get playerMaxHp(){return playerMaxHp;} };
+</script>
+</body></html>
